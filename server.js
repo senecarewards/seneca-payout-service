@@ -68,7 +68,11 @@ async function getAuthToken() {
     }
   );
 
-  const token = resp.data.data.token;
+    const token = resp.data && resp.data.data && resp.data.data.token;
+  console.log("DEBUG authorize response:", JSON.stringify(resp.data));
+  if (!token) {
+    throw new Error("No token in authorize response: " + JSON.stringify(resp.data));
+  }
   // Token is valid ~10 minutes — refresh a bit early to be safe
   cachedToken = token;
   cachedTokenExpiry = Date.now() + 8 * 60 * 1000;

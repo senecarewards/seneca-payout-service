@@ -32,17 +32,29 @@ const CASHFREE_BASE_URL =
     : "https://sandbox.cashfree.com/payout";
 
 function generateCfSignature() {
-  if (!CASHFREE_PUBLIC_KEY) return null;
-  const data = `${CASHFREE_CLIENT_ID}.${Math.floor(Date.now() / 1000)}`;
-  const encrypted = crypto.publicEncrypt(
-    {
-      key: CASHFREE_PUBLIC_KEY,
-      padding: crypto.constants.RSA_PKCS1_OAEP_PADDING,
-      oaepHash: "sha1",
-    },
-    Buffer.from(data)
-  );
-  return encrypted.toString("base64");
+  if (!CASHFREE_PUBLIC_KEY) {
+    console.log("DEBUG: CASHFREE_PUBLIC_KEY is missing/empty");
+    return null;
+  }
+  console.log("DEBUG: public key length:", CASHFREE_PUBLIC_KEY.length);
+  console.log("DEBUG: public key starts with:", CASHFREE_PUBLIC_KEY.slice(0, 30));
+  try {
+    const data = `${CASHFREE_CLIENT_ID}.${Math.floor(Date.now() / 1000)}`;
+    const encrypted = crypto.publicEncrypt(
+      {
+        key: CASHFREE_PUBLIC_KEY,
+        padding: crypto.constants.RSA_PKCS1_OAEP_PADDING,
+        oaepHash: "sha1",
+      },
+      Buffer.from(data)
+    );
+    const sig = encrypted.toString("base64");
+    console.log("DEBUG: signature generated, length:", sig.length);
+    return sig;
+  } catch (err) {
+    console.log("DEBUG: signature generation FAILED:", err.message);
+    return null;
+  }
 }
 
 function cashfreeHeaders() {

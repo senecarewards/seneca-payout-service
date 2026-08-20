@@ -26,8 +26,8 @@ const {
 
 const CASHFREE_BASE_URL =
   CASHFREE_ENV === "production"
-    ? "https://payout-api.cashfree.com"
-    : "https://payout-gamma.cashfree.com";
+    ? "https://api.cashfree.com/payout"
+    : "https://sandbox.cashfree.com/payout";
 
 function cashfreeHeaders() {
   return {
@@ -41,7 +41,7 @@ function cashfreeHeaders() {
 async function registerBeneficiary({ beneficiaryId, name, phone, vpa }) {
   try {
     await axios.post(
-      `${CASHFREE_BASE_URL}/payout/beneficiary`,
+      `${CASHFREE_BASE_URL}/beneficiary`,
       {
         beneficiary_id: beneficiaryId,
         beneficiary_name: name,
@@ -51,6 +51,7 @@ async function registerBeneficiary({ beneficiaryId, name, phone, vpa }) {
       { headers: cashfreeHeaders(), timeout: 15000 }
     );
   } catch (err) {
+    // 409 = beneficiary already exists, which is fine — anything else, rethrow
     if (err.response && err.response.status === 409) return;
     throw err;
   }
@@ -58,7 +59,7 @@ async function registerBeneficiary({ beneficiaryId, name, phone, vpa }) {
 
 async function createPayout({ transferId, beneficiaryId, amount, remarks }) {
   const resp = await axios.post(
-    `${CASHFREE_BASE_URL}/payout/transfers`,
+    `${CASHFREE_BASE_URL}/transfers`,
     {
       transfer_id: transferId,
       transfer_amount: Number(amount),
@@ -90,6 +91,8 @@ async function markPaidInFrappe(docName) {
 }
 
 app.post("/cashfree-payout", async (req, res) => {
+  // Reject anything that doesn't carry the shared secret — this endpoint is
+  // public (Frappe needs to reach it), so this header is the only gate.
   if (req.get("x-webhook-secret") !== WEBHOOK_SECRET) {
     return res.status(401).json({ error: "invalid secret" });
   }
@@ -101,6 +104,7 @@ app.post("/cashfree-payout", async (req, res) => {
   }
 
   if (status !== "Approved") {
+    // Webhook may fire on other status changes too — only act on Approved
     return res.status(200).json({ status: "ignored, not Approved" });
   }
 

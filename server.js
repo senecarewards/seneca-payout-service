@@ -28,77 +28,92 @@ const {
 
 const CASHFREE_BASE_URL =
   CASHFREE_ENV === "production"
-    ? "https://api.cashfree.com/payout"
-    : "https://sandbox.cashfree.com/payout";
+    ? "https://payout-api.cashfree.com/payout/v1"
+    : "https://payout-gamma.cashfree.com/payout/v1";
 
 function generateCfSignature() {
-  if (!CASHFREE_PUBLIC_KEY) {
-    console.log("DEBUG: CASHFREE_PUBLIC_KEY is missing/empty");
-    return null;
-  }
-  console.log("DEBUG: public key length:", CASHFREE_PUBLIC_KEY.length);
-  console.log("DEBUG: public key starts with:", CASHFREE_PUBLIC_KEY.slice(0, 30));
-  try {
-    const data = `${CASHFREE_CLIENT_ID}.${Math.floor(Date.now() / 1000)}`;
-    const encrypted = crypto.publicEncrypt(
-      {
-        key: CASHFREE_PUBLIC_KEY,
-        padding: crypto.constants.RSA_PKCS1_OAEP_PADDING,
-        oaepHash: "sha1",
-      },
-      Buffer.from(data)
-    );
-    const sig = encrypted.toString("base64");
-    console.log("DEBUG: signature generated, length:", sig.length);
-    return sig;
-  } catch (err) {
-    console.log("DEBUG: signature generation FAILED:", err.message);
-    return null;
-  }
+  const data = `${CASHFREE_CLIENT_ID}.${Math.floor(Date.now() / 1000)}`;
+  const encrypted = crypto.publicEncrypt(
+    {
+      key: CASHFREE_PUBLIC_KEY,
+      padding: crypto.constants.RSA_PKCS1_OAEP_PADDING,
+      oaepHash: "sha1",
+    },
+    Buffer.from(data)
+  );
+  return encrypted.toString("base64");
 }
 
-function cashfreeHeaders() {
-  const headers = {
-    "x-client-id": CASHFREE_CLIENT_ID,
-    "x-client-secret": CASHFREE_CLIENT_SECRET,
-    "x-api-version": "2024-01-01",
-    "Content-Type": "application/json",
-  };
+// Cache the bearer token in memory — it's valid for a while, no need to
+// re-authorize on every single request.
+let cachedToken = null;
+let cachedTokenExpiry = 0;
+
+async function getAuthToken() {
+  if (cachedToken && Date.now() < cachedTokenExpiry) {
+    return cachedToken;
+  }
+
   const signature = generateCfSignature();
-  if (signature) headers["X-Cf-Signature"] = signature;
-  return headers;
+  const resp = await axios.post(
+    `${CASHFREE_BASE_URL}/authorize`,
+    {},
+    {
+      headers: {
+        "X-Client-Id": CASHFREE_CLIENT_ID,
+        "X-Client-Secret": CASHFREE_CLIENT_SECRET,
+        "X-Cf-Signature": signature,
+      },
+      timeout: 15000,
+    }
+  );
+
+  const token = resp.data.data.token;
+  // Token is valid ~10 minutes — refresh a bit early to be safe
+  cachedToken = token;
+  cachedTokenExpiry = Date.now() + 8 * 60 * 1000;
+  return token;
 }
 
 async function registerBeneficiary({ beneficiaryId, name, phone, vpa }) {
+  const token = await getAuthToken();
   try {
     await axios.post(
-      `${CASHFREE_BASE_URL}/beneficiary`,
+      `${CASHFREE_BASE_URL}/addBeneficiary`,
       {
-        beneficiary_id: beneficiaryId,
-        beneficiary_name: name,
-        beneficiary_instrument_details: { vpa },
-        beneficiary_contact_details: { beneficiary_phone: phone || "9999999999" },
+        beneId: beneficiaryId,
+        name,
+        email: "customer@seneca.co.in",
+        phone: phone || "9999999999",
+        vpa,
+        address1: "NA",
       },
-      { headers: cashfreeHeaders(), timeout: 15000 }
+      {
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        timeout: 15000,
+      }
     );
   } catch (err) {
-    // 409 = beneficiary already exists, which is fine — anything else, rethrow
-    if (err.response && err.response.status === 409) return;
+    // Beneficiary already exists — safe to ignore and proceed
+    const msg = err.response && err.response.data && err.response.data.message;
+    if (msg && msg.toLowerCase().includes("already")) return;
     throw err;
   }
 }
 
-async function createPayout({ transferId, beneficiaryId, amount, remarks }) {
+async function createPayout({ transferId, beneficiaryId, amount }) {
+  const token = await getAuthToken();
   const resp = await axios.post(
-    `${CASHFREE_BASE_URL}/transfers`,
+    `${CASHFREE_BASE_URL}/requestTransfer`,
     {
-      transfer_id: transferId,
-      transfer_amount: Number(amount),
-      beneficiary_details: { beneficiary_id: beneficiaryId },
-      transfer_mode: "upi",
-      remarks: (remarks || "Seneca reward").slice(0, 50),
+      beneId: beneficiaryId,
+      amount: String(amount),
+      transferId,
     },
-    { headers: cashfreeHeaders(), timeout: 20000 }
+    {
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      timeout: 20000,
+    }
   );
   return resp.data;
 }
@@ -153,7 +168,6 @@ app.post("/cashfree-payout", async (req, res) => {
       transferId: name,
       beneficiaryId,
       amount,
-      remarks: `Seneca reward ${name}`,
     });
 
     await markPaidInFrappe(name);

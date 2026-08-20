@@ -9,6 +9,7 @@
 
 const express = require("express");
 const axios = require("axios");
+const crypto = require("crypto");
 
 const app = express();
 app.use(express.json({ type: () => true }));
@@ -22,6 +23,7 @@ const {
   FRAPPE_BASE_URL,
   FRAPPE_API_KEY,
   FRAPPE_API_SECRET,
+  CASHFREE_PUBLIC_KEY,
 } = process.env;
 
 const CASHFREE_BASE_URL =
@@ -29,13 +31,30 @@ const CASHFREE_BASE_URL =
     ? "https://api.cashfree.com/payout"
     : "https://sandbox.cashfree.com/payout";
 
+function generateCfSignature() {
+  if (!CASHFREE_PUBLIC_KEY) return null;
+  const data = `${CASHFREE_CLIENT_ID}.${Math.floor(Date.now() / 1000)}`;
+  const encrypted = crypto.publicEncrypt(
+    {
+      key: CASHFREE_PUBLIC_KEY,
+      padding: crypto.constants.RSA_PKCS1_OAEP_PADDING,
+      oaepHash: "sha1",
+    },
+    Buffer.from(data)
+  );
+  return encrypted.toString("base64");
+}
+
 function cashfreeHeaders() {
-  return {
+  const headers = {
     "x-client-id": CASHFREE_CLIENT_ID,
     "x-client-secret": CASHFREE_CLIENT_SECRET,
     "x-api-version": "2024-01-01",
     "Content-Type": "application/json",
   };
+  const signature = generateCfSignature();
+  if (signature) headers["X-Cf-Signature"] = signature;
+  return headers;
 }
 
 async function registerBeneficiary({ beneficiaryId, name, phone, vpa }) {
